@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  # Streamlit Web Interface (Main control panel)
+  streamlit:
+    build: .
+    container_name: pqc_streamlit
+    ports:
+      - "8501:8501"
+    networks:
+      - pqc_network
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: streamlit run streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Cloud Backend (WebSocket server for certificate verification)
+  cloud:
+    build: .
+    container_name: pqc_cloud
+    ports:
+      - "9000:9000"
+    networks:
+      - pqc_network
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python main.py --mode cloud --host 0.0.0.0 --port 9000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.settimeout(1); result = s.connect_ex(('localhost', 9000)); s.close(); exit(result)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # Charging Station (SECC - Supply Equipment Communication Controller)
+  station:
+    build: .
+    container_name: pqc_station
+    ports:
+      - "15118:15118"
+    networks:
+      - pqc_network
+    volumes:
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+    command: python main.py --mode station --host 0.0.0.0 --port 15118 --cloud-host cloud --cloud-port 9000 --pqc
+    depends_on:
+      - cloud
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket; s = socket.socket(socket.AF_INET, socket.SOCK_STREAM); s.settimeout(1); result = s.connect_ex(('localhost', 15118)); s.close(); exit(result)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # Electric Vehicle Client (EVCC - for testing)
+  # Note: This is typically run on-demand, not as a persistent service
+  # Uncomment to run automatic charging sessions
+  # vehicle:
+  #   build: .
+  #   container_name: pqc_vehicle
+  #   networks:
+  #     - pqc_network
+  #   volumes:
+  #     - ./logs:/app/logs
+  #   environment:
+  #     - PYTHONUNBUFFERED=1
+  #   command: python main.py --mode vehicle --host station --port 15118 --pqc
+  #   depends_on:
+  #     - station
+  #   restart: "no"
+
+networks:
+  pqc_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+volumes:
+  logs:
+    driver: local
